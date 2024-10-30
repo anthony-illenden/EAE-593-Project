@@ -574,3 +574,175 @@ def thetae_pv_cross_section(start_point, end_point, ds_pl, directions, g, path):
         plt.savefig(f'{path}/thetae_pv_cross_section_{formatted_datetime}.png')
         plt.close()
         #plt.show()
+
+def plot_ivt(g, ds_pl, ds_sfc, directions, path):
+    # Loop over the reanlysis time steps
+    for i in range(0, len(ds_pl.time)):
+        # Slice the dataset to get the data for the current time step
+        ds_sliced = ds_pl.isel(time=i)
+        ds_sfc_sliced = ds_sfc.isel(time=i)
+        
+        # Slice the dataset to get the data for the region of interest
+        ds_sliced = ds_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+        ds_sfc_sliced = ds_sfc_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+        # Slice the dataset to get the data for the pressure levels between 500 and 1000 hPa
+        u_sliced = ds_sliced['U'].sel(level=slice(500, 1000)) # units: m/s
+        v_sliced = ds_sliced['V'].sel(level=slice(500, 1000)) # units: m/s
+        q_sliced = ds_sliced['Q'].sel(level=slice(500, 1000)) # units: kg/kg
+
+        mslp = ds_sfc_sliced['MSL'] / 100 # units: hPa
+
+        # Flip the order of the pressure levels and convert them to Pa from hPa
+        pressure_levels = u_sliced.level[::-1] * 100 # units: Pa
+
+        # Calculate the integrated vapor transport (IVT) using the u- and v-wind components and the specific humidity
+        u_ivt = -1 / g * np.trapz(u_sliced * q_sliced, pressure_levels, axis=0)
+        v_ivt = -1 / g * np.trapz(v_sliced * q_sliced, pressure_levels, axis=0)
+
+        # Calculate the IVT magnitude
+        ivt = np.sqrt(u_ivt**2 + v_ivt**2)
+
+        # Create an xarray DataArray for the IVT
+        ivt_da = xr.DataArray(ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']})
+
+        # Define the color levels and colors for the IVT plot
+        levels = [250, 300, 400, 500, 600, 700, 800, 1000, 1200, 1400, 1600, 1800]
+        colors = ['#ffff00', '#ffe400', '#ffc800', '#ffad00', '#ff8200', '#ff5000', '#ff1e00', '#eb0010', '#b8003a', '#850063', '#570088']
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot the IVT
+        c = plt.contour(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), colors='black', levels=levels, linewidths=0.5)
+        cf = plt.contourf(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), cmap=cmap, levels=levels, norm=norm, extend='max')
+        plt.colorbar(cf, orientation='vertical', label='IVT (kg/m/s)', fraction=0.046, pad=0.04)
+
+        # Mask the IVT values below 250 kg/m/s and create a filtered DataArray for the u- and v-wind components
+        mask = ivt_da >= 250
+        u_ivt_filtered = xr.DataArray(u_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+        v_ivt_filtered = xr.DataArray(v_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+
+        # Plot the IVT vectors
+        step = 5 
+        plt.quiver(u_ivt_filtered['longitude'][::step], u_ivt_filtered['latitude'][::step], u_ivt_filtered[::step, ::step], v_ivt_filtered[::step, ::step], scale=500,scale_units='xy', color='black')
+        
+        isobars = plt.contour(mslp['longitude'], mslp['latitude'], gaussian_filter(mslp, sigma=1), colors='black', levels=np.arange(960, 1080, 4), linewidths=0.5)
+        try:
+            plt.clabel(isobars, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for isobars.")
+
+        # Adding custom legend entries (hardcoded)
+        isobars_line = plt.Line2D([0], [0], color='black', linewidth=1, label='MSLP (hPa)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[isobars_line], loc='upper right')
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'ERA5 Reanalysis Integrated Water Vapor Transport (IVT) | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='#ecf9fd')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+        plt.tight_layout()
+
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/ivt_{formatted_datetime}.png')
+        plt.close()
+
+def plot_iwv(g, ds_pl, directions, path):
+    # Loop over the reanalysis time steps
+    for i in range(0, len(ds_pl.time)):
+        # Slice the dataset to get the data for the current time step
+        ds_sliced = ds_pl.isel(time=i)
+
+        # Slice the dataset to get the data for the region of interest
+        ds_sliced = ds_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+        
+        # Slice the dataset to get the data for the pressure levels between 500 and 1000 hPa, or specifically at 850 hPa
+        u_sliced = ds_sliced['U'].sel(level=slice(500, 1000)) # units: m/s
+        u_850 = ds_sliced['U'].sel(level=850) * 1.94384 # units: knots
+        v_sliced = ds_sliced['V'].sel(level=slice(500, 1000)) # units: m/s
+        v_850 = ds_sliced['V'].sel(level=850) * 1.94384 # units: knots
+        q_sliced = ds_sliced['Q'].sel(level=slice(500, 1000)) # units: kg/kg
+        z_sliced = ds_sliced['Z'].sel(level=850) # units: m
+        pressure_levels = u_sliced.level[::-1] * 100 # units: Pa
+
+        # Calculate the integrated water vapor (IWV) using the specific humidity and put it in an xarray DataArray
+        iwv = -1 / g * np.trapz(q_sliced, pressure_levels, axis=0)
+        iwv_da = xr.DataArray(iwv, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']})
+
+        # Define the color levels and colors for the IWV plot
+        levels = np.arange(20, 61, 2)
+        colors = ['#1a2dd3', '#1a43ff', '#2486ff', '#31ccff', '#3cfbf0', '#37e5aa', '#32ce63', '#33be21', '#76d31c', '#bae814', '#fffc02',
+                    '#ffe100', '#fec600', '#fdab00', '#fc7800', '#fc4100', '#fc0000','#d2002f', '#a31060', '#711e8b', '#8a51af']
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Create the plot 
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot the geopotential heights and IWV
+        isohypses = plt.contour(z_sliced['longitude'], z_sliced['latitude'], gaussian_filter(z_sliced, sigma=1), colors='black')
+        try:
+            plt.clabel(isohypses, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for geopotential heights.")
+        c = plt.contour(iwv_da['longitude'], iwv_da['latitude'], gaussian_filter(iwv_da, sigma=1), colors='black', levels=levels, linewidths=0.5)
+        cf = plt.contourf(iwv_da['longitude'], iwv_da['latitude'], gaussian_filter(iwv_da, sigma=1), cmap=cmap, levels=levels, norm=norm, extend='max')
+        plt.colorbar(cf, orientation='vertical', label='IWV (mm)', fraction=0.046, pad=0.04)
+
+        # Plot the wind barbs for the u- and v-wind components at 850 hPa
+        step = 10 
+        ax.barbs(u_850['longitude'][::step], u_850['latitude'][::step], u_850[::step, ::step], v_850[::step, ::step], length=6, color='black')
+        
+        # Adding custom legend entries (hardcoded)
+        isohypses_line = plt.Line2D([0], [0], color='black', linewidth=1, label='Geopotential Heights (m)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[isohypses_line], loc='upper right')
+
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'IWV and 850-hPa Geopotential Heights and Winds | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='#ecf9fd')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/iwv_{formatted_datetime}.png')
+        plt.close()
