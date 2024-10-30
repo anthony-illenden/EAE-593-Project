@@ -11,6 +11,95 @@ from metpy.units import units
 from scipy.ndimage import gaussian_filter
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 
+def load_datasets(year, month, start_day, start_hour=0, end_day=None, end_hour=23):
+    """
+    Load datasets for specified start day, month, and year.
+    
+    Parameters:
+        year (int): The year of the data.
+        month (int): The month of the data.
+        start_day (int): The start day of the data.
+        start_hour (int, optional): The hour of the start day. Defaults to 0.
+        end_day (int, optional): The end day of the data. Defaults to start_day.
+        end_hour (int, optional): The hour of the end day. Defaults to 23.
+        
+    Returns:
+        tuple: Xarray Datasets for pressure level and surface datasets.
+    """
+    
+    # Set end_day to start_day if not provided
+    if end_day is None:
+        end_day = start_day
+    
+    # Get the last day of the month
+    last_day_of_month = pd.Timestamp(year=year, month=month, day=1) + pd.offsets.MonthEnd(1)
+    last_day_str = f"{last_day_of_month.day:02d}"  # format last day as two digits
+    
+    # Format date and time strings
+    year_month = f'{year}{month:02d}'
+    start_time = f'{year}{month:02d}{start_day:02d}{start_hour:02d}'  # yyyymmddhh (start)
+    end_time = f'{year}{month:02d}{end_day:02d}{end_hour:02d}'  # yyyymmddhh (end)
+    
+    # Define URLs for pressure level datasets with specific time ranges
+    urls = {
+        'temperature_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_130_t.ll025sc.{start_time}_{end_time}.nc',
+        'geopotential_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_129_z.ll025sc.{start_time}_{end_time}.nc',
+        'humidity_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_133_q.ll025sc.{start_time}_{end_time}.nc',
+        'v_wind_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_132_v.ll025uv.{start_time}_{end_time}.nc',
+        'u_wind_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_131_u.ll025uv.{start_time}_{end_time}.nc',
+        'w_wind_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_135_w.ll025sc.{start_time}_{end_time}.nc',
+        'pv_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_060_pv.ll025sc.{start_time}_{end_time}.nc',
+        
+        # Define URLs for surface datasets to cover the full month using last_day_of_month
+        'mslp_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.128_151_msl.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc',
+        'u_wind_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.228_131_u10n.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc',
+        'v_wind_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.228_132_v10n.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc'
+    }
+
+    # Initialize empty dictionaries for datasets
+    datasets = {}
+    
+    # Try to load datasets from the URLs
+    for var, url in urls.items():
+        try:
+            tds_catalog = TDSCatalog(url)
+            ds_url = tds_catalog.datasets[0].access_urls['OPENDAP']
+            ds = xr.open_dataset(ds_url).metpy.parse_cf()
+            datasets[var] = ds
+            print(f"Successfully loaded {var}")
+
+        except Exception as e:
+            print(f"Error loading {var}: {e}")
+
+    # Merge pressure level datasets if available
+    ds_pl, ds_sfc = None, None
+    
+    try:
+        ds_pl = xr.merge([datasets['temperature_pl'], datasets['geopotential_pl'], datasets['humidity_pl'], 
+                          datasets['v_wind_pl'], datasets['u_wind_pl'], datasets['w_wind_pl'], datasets['pv_pl']])
+        print("Successfully merged pressure level datasets")
+    except KeyError as e:
+        print(f"Error merging pressure level datasets: {e}")
+
+    # Merge surface datasets if available
+    try:
+        ds_sfc = xr.merge([datasets['mslp_sfc'], datasets['v_wind_sfc'], datasets['u_wind_sfc']])
+        print("Successfully merged surface datasets")
+    except KeyError as e:
+        print(f"Error merging surface datasets: {e}")
+
+    # Synchronize time dimensions
+    try:
+        if ds_pl is not None and ds_sfc is not None:
+            first_time_pl, last_time_pl = ds_pl['time'].min().values, ds_pl['time'].max().values
+            ds_sfc = ds_sfc.sel(time=slice(first_time_pl, last_time_pl))
+    except KeyError as e:
+        print(f"Error accessing 'time' in the datasets: {e}")
+    except Exception as e:
+        print(f"An error occurred during slicing: {e}")
+        
+    return ds_pl, ds_sfc
+
 def plot_vorticity_adv(g, ds_pl, directions, path):
     # Loop over the reanlysis time steps
     for i in range(0, len(ds_pl.time.values)):
