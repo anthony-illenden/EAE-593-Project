@@ -14,12 +14,12 @@ import sys
 import os
 
 sys.path.append(os.path.abspath('C:/Users/Tony/Documents/GitHub/EAE-593-Project'))
-from main_script import plot_vorticity_adv, load_datasets
+from main_script import plot_vorticity_adv, load_datasets, plot_250_isotachs
 
 if __name__ == '__main__':
     year = 2019
     month = 1
-    start_day = 8
+    start_day = 12
     ds_pl, ds_sfc = load_datasets(year, month, start_day, start_hour=0, end_day=None, end_hour=23)
     directions = {'North': 55, 
                   'East': 250, 
@@ -31,5 +31,6 @@ if __name__ == '__main__':
     # Get the current working directory
     current_dir = os.getcwd()
     # Append the desired folder to the path
-    path = os.path.join(current_dir, 'Vorticity')
-    plot_vorticity_adv(ds_pl=ds_pl, directions=directions, g=g, path=path)
+    path = os.path.join(current_dir, 'Isotachs')
+    plot_250_isotachs(ds_pl=ds_pl, directions=directions, g=g, path=path)
+    #plot_vorticity_adv(ds_pl=ds_pl, directions=directions, g=g, path=path)
