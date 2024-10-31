@@ -746,3 +746,82 @@ def plot_iwv(g, ds_pl, directions, path):
         formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
         plt.savefig(f'{path}/iwv_{formatted_datetime}.png')
         plt.close()
+
+    def plot_q_uv_zeta(g, ds_pl, directions, path):
+    # Loop over the reanlysis time steps
+        for i in range(0, len(ds_pl.time)):
+            # Slice the dataset to get the data for the current time step
+            ds_pl_sliced = ds_pl.isel(time=i)
+            
+            # Slice the dataset to get the data for the region of interest
+            ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+            # Slice the dataset to get the data for the pressure levels at 850 hPa
+            t_sliced = ds_pl_sliced['T'].sel(level=850) # units: K
+            u_sliced = ds_pl_sliced['U'].sel(level=850) # units: m/s
+            v_sliced = ds_pl_sliced['V'].sel(level=850) # units: m/s
+            q_sliced = ds_pl_sliced['Q'].sel(level=850) * 1000 # units: g/kg
+
+            # Calculate the potential temperature and relative vorticity
+            theta_sliced = mpcalc.potential_temperature(850 * units.hPa, t_sliced) # units: K
+            zeta_sliced = mpcalc.vorticity(u_sliced, v_sliced) # units: 10^-5 s^-1
+
+            # Get the time of the current time step and create a pandas DatetimeIndex
+            time = ds_pl_sliced.time.values
+            int_datetime_index = pd.DatetimeIndex([time])
+
+            # Define the color levels and colors for the specific humidity
+            levels = np.arange(4, 15, 1)
+            colors = ['#c3e8fa', '#8bc5e9', '#5195cf', '#49a283', '#6cc04b', '#d8de5a', '#f8b348', '#f46328', '#dc352b', '#bb1b24', '#911618']
+            cmap = mcolors.ListedColormap(colors)
+            norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+            # Smooth the specific humidity and potential temperature
+            q_smoothed = gaussian_filter(q_sliced, sigma=1)
+            theta_smoothed = gaussian_filter(theta_sliced, sigma=1)
+            zeta_smoothed = gaussian_filter(zeta_sliced, sigma=1)
+
+            # Create the figure
+            fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+            # Plot the specific humidity, potential temperature, and wind barbs
+            plt.contour(zeta_sliced['longitude'], zeta_sliced['latitude'], zeta_smoothed, colors='purple', levels=np.arange(10 * 10**-5, 30 * 10**-5, 10**-5), linewidths=0.5, label='$\\zeta$')
+            plt.contour(theta_sliced['longitude'], theta_sliced['latitude'], theta_smoothed, colors='black', levels=np.arange(220, 340, 1), linewidths=0.5, label='$\\theta$')
+            cf = plt.contourf(q_sliced['longitude'], q_sliced['latitude'], q_smoothed, cmap=cmap, levels=levels, norm=norm, extend='max')
+            plt.colorbar(cf, orientation='vertical', label='Specific Humidity (g kg$^{-1}$)', fraction=0.046, pad=0.04)
+
+            # Plot the 850-hPa wind barbs
+            step = 10
+            ax.barbs(u_sliced['longitude'][::step], u_sliced['latitude'][::step], u_sliced[::step, ::step], v_sliced[::step, ::step], length=6, color='black')
+
+            # Adding custom legend entries (hardcoded)
+            zeta_line = plt.Line2D([0], [0], color='purple', linewidth=1, label=r'$\zeta$ Relative Vorticity')
+            theta_line = plt.Line2D([0], [0], color='black', linewidth=1, label=r'$\theta$ Potential Temperature')
+
+            # Creating the legend with the custom entries
+            ax.legend(handles=[zeta_line, theta_line], loc='upper right')
+
+            # Add the title, set the map extent, and add map features
+            plt.title(f'ERA5 Reanalysis 850-hPa Specific Humidity, $\\theta$, $\\zeta$, and Wind Barbs | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+            ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+            ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+            ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+            ax.add_feature(cfeature.OCEAN, color='white')
+            ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+            ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+            # Add gridlines and format longitude/latitude labels
+            gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+            gls.top_labels = False
+            gls.right_labels = False
+            ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+            ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+            lon_formatter = LongitudeFormatter()
+            lat_formatter = LatitudeFormatter()
+            ax.xaxis.set_major_formatter(lon_formatter)
+            ax.yaxis.set_major_formatter(lat_formatter)
+
+            plt.tight_layout()
+            formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+            plt.savefig(f'{path}/specific_humidity_{formatted_datetime}.png')
+            plt.close()
