@@ -825,3 +825,60 @@ def plot_q_uv_zeta(g, ds_pl, directions, path):
             formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
             plt.savefig(f'{path}/specific_humidity_{formatted_datetime}.png')
             plt.close()
+
+def plot_pressure_pert(ds_sfc, directions, path):
+    # Loop over the reanlysis time steps
+    for i in range(0, len(ds_sfc.time)):
+        # Slice the dataset to get the data for the current time step
+        ds_sfc_sliced = ds_sfc.isel(time=i)
+        
+        # Slice the dataset to get the data for the region of interest
+        ds_sfc_sliced = ds_sfc_sliced.sel(latitude=slice(directions['North']+5, directions['South']-5), longitude=slice(directions['West']-5, directions['East']+5))
+
+        # Sice the dataset to get the MSL
+        mslp = ds_sfc_sliced['MSL'] / 100 # units: hPa
+
+        # Calculate pressure perturbation
+        p_pert = mslp - mslp.mean()
+
+            # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_sfc_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot 
+        cf = plt.contourf(p_pert['longitude'], p_pert['latitude'], p_pert, cmap='PiYG', levels=np.arange(-20, 20, 1), extend='both')
+        plt.colorbar(cf, orientation='vertical', label='hPa', fraction=0.046, pad=0.04)
+
+        isobars = plt.contour(mslp['longitude'], mslp['latitude'], gaussian_filter(mslp, sigma=1), colors='black', levels=np.arange(960, 1080, 4), linewidths=1)
+        try:
+            plt.clabel(isobars, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for isobars.")
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'ERA5 Reanalysis MSLP Perturbation and Isobars (hPa) | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/p_{formatted_datetime}.png')
+        plt.close()
