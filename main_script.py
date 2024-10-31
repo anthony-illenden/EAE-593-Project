@@ -882,3 +882,236 @@ def plot_pressure_pert(ds_sfc, directions, path):
         formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
         plt.savefig(f'{path}/p_{formatted_datetime}.png')
         plt.close()
+
+def plot_250_isotachs_ageo(ds_pl, directions, g, path):
+    # Loop over the reanalysis time steps
+    for i in range(0, len(ds_pl.time.values)):
+        # Slice the dataset to get the data for the current time step
+        ds_pl_sliced = ds_pl.isel(time=i)
+
+        # Slice the dataset to get the data for the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+        
+        # Slice the dataset to get the data for the pressure level at 250 hPa
+        u_250 = ds_pl_sliced['U'].sel(level=250) # units: m/s
+        v_250 = ds_pl_sliced['V'].sel(level=250) # units: m/s
+        z_250 = ds_pl_sliced['Z'].sel(level=250) / g * units.meters # units: m
+        pressure_levels = u_250.level * 100 # units: Pa
+
+        # Calculate the ageostrophic wind
+        u_ageo, v_ageo = mpcalc.ageostrophic_wind(z_250, u_250, v_250)
+
+        # Calculate the wind speed at 250 hPa
+        wind_speed_250 = np.sqrt(u_250**2 + v_250**2)
+        ageo_wind_speed = mpcalc.wind_speed(u_ageo, v_ageo)
+        #ageo_wind_speed = np.sqrt(u_ageo**2 + v_ageo**2)
+        # Calculate the divergence
+        div = mpcalc.divergence(u_250, v_250) * 1e5
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Smooth the mslp and wind speed
+        z_smoothed = gaussian_filter(z_250, sigma=3)
+        wnd_smoothed = gaussian_filter(wind_speed_250, sigma=3)
+
+        # Define the color levels and colors for the isotachs
+        levels = np.arange(20, 95, 5)
+        colors = ['#daedfb', '#b7dcf6', '#91bae4', '#7099ce', '#6a999d', '#72ad63', '#77c14a', '#cad955', '#f8cf4f', '#f7953c', '#ef5f28', '#e13e26', '#cd1e28', '#b1181e', '#901617']
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Create the plot 
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot the geopotential heights and isotachs
+        isohypses = plt.contour(z_250['longitude'], z_250['latitude'], z_smoothed, colors='black', levels=np.arange(8700, 11820, 60), linewidths=1)
+        try:
+            ax.clabel(isohypses, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label.")
+        #div_contours = plt.contour(ds_pl_sliced['longitude'], ds_pl_sliced['latitude'], div, colors='black', levels=np.arange(-24, 24, 1), linestyles='dashed')
+        pos_div = plt.contour(ds_pl_sliced['longitude'], ds_pl_sliced['latitude'], div, colors='magenta', levels=np.arange(8, 24, 4), linestyles='solid')
+        try:
+            ax.clabel(pos_div, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label.")
+        cf = plt.contourf(u_250['longitude'], u_250['latitude'], wnd_smoothed, cmap=cmap, norm=norm, levels=levels, extend='max')
+        plt.colorbar(cf, orientation='vertical', label='Wind Speed (ms$^{-1}$)', fraction=0.046, pad=0.04)
+
+        mask = ageo_wind_speed >= 2.5 * units.meters / units.second
+
+        # Create DataArrays for u and v wind components with the appropriate dimensions and coordinates
+        u_ageo_da = xr.DataArray(u_ageo, dims=['latitude', 'longitude'], coords={'latitude': u_250['latitude'], 'longitude': u_250['longitude']})
+        v_ageo_da = xr.DataArray(v_ageo, dims=['latitude', 'longitude'], coords={'latitude': v_250['latitude'], 'longitude': v_250['longitude']})
+
+        # Filter the DataArrays using the mask
+        u_ageo_filtered = u_ageo_da.where(mask, drop=True)
+        v_ageo_filtered = v_ageo_da.where(mask, drop=True)
+
+        step = 10
+        ax.barbs(u_ageo_filtered['longitude'][::step], u_ageo_filtered['latitude'][::step], u_ageo_filtered[::step, ::step], v_ageo_filtered[::step, ::step], length=6, color='black')
+        
+        # Plot the IVT vectors
+        #step = 5 
+        #plt.quiver(u_ivt_filtered['longitude'][::step], u_ivt_filtered['latitude'][::step], u_ivt_filtered[::step, ::step], v_ivt_filtered[::step, ::step], scale=500,scale_units='xy', color='black')
+
+        # Adding custom legend entries (hardcoded)
+        isohypses_line = plt.Line2D([0], [0], color='black', linewidth=1, label='Geopotential Height (m)')
+        div_line = plt.Line2D([0], [0], color='magenta', linewidth=1, linestyle='solid', label='Divergence (10$^{-5}$ s$^{-1}$)')
+
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[isohypses_line, div_line], loc='upper right')
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'250-hPa Isoatachs, Ageostrophic Wind (m/s), and Divergence | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North'] - 5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='#ecf9fd')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/ageo_{formatted_datetime}.png')
+        plt.close()
+
+def plot_250_isotachs_ageo_stream(ds_pl, directions, g, path):
+    # Loop over the reanalysis time steps
+    for i in range(0, len(ds_pl.time.values)):
+        # Slice the dataset to get the data for the current time step
+        ds_pl_sliced = ds_pl.isel(time=i)
+
+        # Slice the dataset to get the data for the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+        
+        # Slice the dataset to get the data for the pressure level at 250 hPa
+        u_250 = ds_pl_sliced['U'].sel(level=250) # units: m/s
+        v_250 = ds_pl_sliced['V'].sel(level=250) # units: m/s
+        z_250 = ds_pl_sliced['Z'].sel(level=250) / g * units.meters # units: m
+        pressure_levels = u_250.level * 100 # units: Pa
+
+        # Calculate the ageostrophic wind
+        u_ageo, v_ageo = mpcalc.ageostrophic_wind(z_250, u_250, v_250)
+
+        # Calculate the wind speed at 250 hPa
+        wind_speed_250 = np.sqrt(u_250**2 + v_250**2)
+        ageo_wind_speed = mpcalc.wind_speed(u_ageo, v_ageo)
+        #ageo_wind_speed = np.sqrt(u_ageo**2 + v_ageo**2)
+        # Calculate the divergence
+        div = mpcalc.divergence(u_250, v_250) * 1e5
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Smooth the mslp and wind speed
+        z_smoothed = gaussian_filter(z_250, sigma=3)
+        wnd_smoothed = gaussian_filter(wind_speed_250, sigma=3)
+
+        # Define the color levels and colors for the isotachs
+        levels = np.arange(20, 95, 5)
+        colors = ['#daedfb', '#b7dcf6', '#91bae4', '#7099ce', '#6a999d', '#72ad63', '#77c14a', '#cad955', '#f8cf4f', '#f7953c', '#ef5f28', '#e13e26', '#cd1e28', '#b1181e', '#901617']
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Create the plot 
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot the geopotential heights and isotachs
+        isohypses = plt.contour(z_250['longitude'], z_250['latitude'], z_smoothed, colors='black', levels=np.arange(8700, 11820, 60), linewidths=1)
+        try:
+            ax.clabel(isohypses, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label.")
+        #div_contours = plt.contour(ds_pl_sliced['longitude'], ds_pl_sliced['latitude'], div, colors='black', levels=np.arange(-24, 24, 1), linestyles='dashed')
+        pos_div = plt.contour(ds_pl_sliced['longitude'], ds_pl_sliced['latitude'], div, colors='magenta', levels=np.arange(8, 24, 4), linestyles='solid')
+        try:
+            ax.clabel(pos_div, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label.")
+        cf = plt.contourf(u_250['longitude'], u_250['latitude'], wnd_smoothed, cmap=cmap, norm=norm, levels=levels, extend='max')
+        plt.colorbar(cf, orientation='vertical', label='Wind Speed (ms$^{-1}$)', fraction=0.046, pad=0.04)
+
+        mask = ageo_wind_speed >= 2.5 * units.meters / units.second
+
+        # Create DataArrays for u and v wind components with the appropriate dimensions and coordinates
+        u_ageo_da = xr.DataArray(u_ageo, dims=['latitude', 'longitude'], coords={'latitude': u_250['latitude'], 'longitude': u_250['longitude']})
+        v_ageo_da = xr.DataArray(v_ageo, dims=['latitude', 'longitude'], coords={'latitude': v_250['latitude'], 'longitude': v_250['longitude']})
+
+        # Filter the DataArrays using the mask
+        u_ageo_filtered = u_ageo_da.where(mask, drop=True)
+        v_ageo_filtered = v_ageo_da.where(mask, drop=True)
+
+        lon = u_ageo_filtered['longitude'].values
+        lat = u_ageo_filtered['latitude'].values
+
+        # Ensure that the grid dimensions are correct
+        u_values = u_ageo_filtered.values  # u wind component
+        v_values = v_ageo_filtered.values  # v wind component
+
+        # Create a meshgrid for streamplot
+        lon_grid, lat_grid = np.meshgrid(lon, lat)
+
+        # Create the figure and axis
+        fig, ax = plt.subplots()
+
+        # Define the step for reducing the density of the streamlines
+        step = 10
+
+        # Create streamlines using the filtered wind components
+        strm = ax.streamplot(
+            lon_grid[::step, ::step], 
+            lat_grid[::step, ::step],
+            u_values[::step, ::step], 
+            v_values[::step, ::step], 
+            color='black', 
+            linewidth=1, 
+            density=2,  # Adjust this for more or less density of streamlines
+        )
+        
+        # Plot the IVT vectors
+        #step = 5 
+        #plt.quiver(u_ivt_filtered['longitude'][::step], u_ivt_filtered['latitude'][::step], u_ivt_filtered[::step, ::step], v_ivt_filtered[::step, ::step], scale=500,scale_units='xy', color='black')
+
+        # Adding custom legend entries (hardcoded)
+        isohypses_line = plt.Line2D([0], [0], color='black', linewidth=1, label='Geopotential Height (m)')
+        div_line = plt.Line2D([0], [0], color='magenta', linewidth=1, linestyle='solid', label='Divergence (10$^{-5}$ s$^{-1}$)')
+
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[isohypses_line, div_line], loc='upper right')
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'250-hPa Isoatachs, Ageostrophic Wind (m/s), and Divergence | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North'] - 5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='#ecf9fd')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.show()
+        #plt.savefig(f'{path}/ageo_{formatted_datetime}.png')
+        #plt.close()
