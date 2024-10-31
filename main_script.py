@@ -747,7 +747,7 @@ def plot_iwv(g, ds_pl, directions, path):
         plt.savefig(f'{path}/iwv_{formatted_datetime}.png')
         plt.close()
 
-    def plot_q_uv_zeta(g, ds_pl, directions, path):
+def plot_q_uv_zeta(g, ds_pl, directions, path):
     # Loop over the reanlysis time steps
         for i in range(0, len(ds_pl.time)):
             # Slice the dataset to get the data for the current time step
@@ -795,8 +795,8 @@ def plot_iwv(g, ds_pl, directions, path):
             ax.barbs(u_sliced['longitude'][::step], u_sliced['latitude'][::step], u_sliced[::step, ::step], v_sliced[::step, ::step], length=6, color='black')
 
             # Adding custom legend entries (hardcoded)
-            zeta_line = plt.Line2D([0], [0], color='purple', linewidth=1, label=r'$\zeta$ Relative Vorticity')
-            theta_line = plt.Line2D([0], [0], color='black', linewidth=1, label=r'$\theta$ Potential Temperature')
+            zeta_line = plt.Line2D([0], [0], color='purple', linewidth=1, label=r'$\zeta$ Relative Vorticity (s$^{-1}$)')
+            theta_line = plt.Line2D([0], [0], color='black', linewidth=1, label=r'$\theta$ Potential Temperature (K)')
 
             # Creating the legend with the custom entries
             ax.legend(handles=[zeta_line, theta_line], loc='upper right')
