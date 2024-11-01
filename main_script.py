@@ -34,12 +34,12 @@ def load_datasets(year, month, start_day, start_hour=0, end_day=None, end_hour=2
     # Get the last day of the month
     last_day_of_month = pd.Timestamp(year=year, month=month, day=1) + pd.offsets.MonthEnd(1)
     last_day_str = f"{last_day_of_month.day:02d}"  # format last day as two digits
-    
+
     # Format date and time strings
     year_month = f'{year}{month:02d}'
     start_time = f'{year}{month:02d}{start_day:02d}{start_hour:02d}'  # yyyymmddhh (start)
     end_time = f'{year}{month:02d}{end_day:02d}{end_hour:02d}'  # yyyymmddhh (end)
-    
+
     # Define URLs for pressure level datasets with specific time ranges
     urls = {
         'temperature_pl': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.pl/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.pl/{year_month}/e5.oper.an.pl.128_130_t.ll025sc.{start_time}_{end_time}.nc',
@@ -53,12 +53,14 @@ def load_datasets(year, month, start_day, start_hour=0, end_day=None, end_hour=2
         # Define URLs for surface datasets to cover the full month using last_day_of_month
         'mslp_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.128_151_msl.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc',
         'u_wind_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.228_131_u10n.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc',
-        'v_wind_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.228_132_v10n.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc'
+        'v_wind_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.228_132_v10n.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc',
+        'temperature_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.128_167_2t.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc',
+        'dew_point_sfc': f'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633000/e5.oper.an.sfc/{year_month}/catalog.html?dataset=files/g/d633000/e5.oper.an.sfc/{year_month}/e5.oper.an.sfc.128_168_2d.ll025sc.{year_month}0100_{year_month}{last_day_str}23.nc'
     }
 
     # Initialize empty dictionaries for datasets
     datasets = {}
-    
+
     # Try to load datasets from the URLs
     for var, url in urls.items():
         try:
@@ -73,17 +75,18 @@ def load_datasets(year, month, start_day, start_hour=0, end_day=None, end_hour=2
 
     # Merge pressure level datasets if available
     ds_pl, ds_sfc = None, None
-    
+
     try:
         ds_pl = xr.merge([datasets['temperature_pl'], datasets['geopotential_pl'], datasets['humidity_pl'], 
-                          datasets['v_wind_pl'], datasets['u_wind_pl'], datasets['w_wind_pl'], datasets['pv_pl']])
+                        datasets['v_wind_pl'], datasets['u_wind_pl'], datasets['w_wind_pl'], datasets['pv_pl']])
         print("Successfully merged pressure level datasets")
     except KeyError as e:
         print(f"Error merging pressure level datasets: {e}")
 
     # Merge surface datasets if available
     try:
-        ds_sfc = xr.merge([datasets['mslp_sfc'], datasets['v_wind_sfc'], datasets['u_wind_sfc']])
+        ds_sfc = xr.merge([datasets['mslp_sfc'], datasets['v_wind_sfc'], datasets['u_wind_sfc'],
+                        datasets['temperature_sfc'], datasets['dew_point_sfc']])
         print("Successfully merged surface datasets")
     except KeyError as e:
         print(f"Error merging surface datasets: {e}")
@@ -1028,6 +1031,8 @@ def plot_250_isotachs_ageo_stream(ds_pl, directions, g, path):
 
         # Create the plot 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North'] - 5])
+
 
         # Plot the geopotential heights and isotachs
         isohypses = plt.contour(z_250['longitude'], z_250['latitude'], z_smoothed, colors='black', levels=np.arange(8700, 11820, 60), linewidths=1)
@@ -1054,14 +1059,20 @@ def plot_250_isotachs_ageo_stream(ds_pl, directions, g, path):
         u_ageo_filtered = u_ageo_da.where(mask, drop=True)
         v_ageo_filtered = v_ageo_da.where(mask, drop=True)
 
-        lon = u_ageo_filtered['longitude'].values
-        lat = u_ageo_filtered['latitude'].values
+        lon = u_ageo_da['longitude'].values
+        lat = v_ageo_da['latitude'].values
 
         # Ensure that the grid dimensions are correct
-        u_values = u_ageo_filtered.values  # u wind component
-        v_values = v_ageo_filtered.values  # v wind component
+        u_values = u_ageo_da.values  # u wind component
+        v_values = v_ageo_da.values  # v wind component
 
-        # Create a meshgrid for streamplot
+        # Check if latitudes are in ascending order, and reverse if necessary
+        if lat[0] > lat[-1]:
+            lat = lat[::-1]  # Reverse the latitude array
+            u_values = u_values[::-1, :]  # Reverse u wind component along latitude
+            v_values = v_values[::-1, :]  # Reverse v wind component along latitude
+
+        # Create the meshgrid with corrected latitudes
         lon_grid, lat_grid = np.meshgrid(lon, lat)
 
         # Create the figure and axis
@@ -1071,16 +1082,8 @@ def plot_250_isotachs_ageo_stream(ds_pl, directions, g, path):
         step = 10
 
         # Create streamlines using the filtered wind components
-        strm = ax.streamplot(
-            lon_grid[::step, ::step], 
-            lat_grid[::step, ::step],
-            u_values[::step, ::step], 
-            v_values[::step, ::step], 
-            color='black', 
-            linewidth=1, 
-            density=2,  # Adjust this for more or less density of streamlines
-        )
-        
+        ax.streamplot(lon_grid, lat_grid, u_values, v_values, density=1, color='black', linewidth=1, transform=ccrs.PlateCarree())
+
         # Plot the IVT vectors
         #step = 5 
         #plt.quiver(u_ivt_filtered['longitude'][::step], u_ivt_filtered['latitude'][::step], u_ivt_filtered[::step, ::step], v_ivt_filtered[::step, ::step], scale=500,scale_units='xy', color='black')
@@ -1095,7 +1098,6 @@ def plot_250_isotachs_ageo_stream(ds_pl, directions, g, path):
 
         # Add the title, set the map extent, and add map features
         plt.title(f'250-hPa Isoatachs, Ageostrophic Wind (m/s), and Divergence | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
-        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North'] - 5])
         ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
         ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
         ax.add_feature(cfeature.OCEAN, color='#ecf9fd')
@@ -1196,4 +1198,86 @@ def plot_pressure_pert_new(ds_sfc, ds_pl, directions, path, g, threshold):
         plt.tight_layout()
         formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
         plt.savefig(f'{path}/pnew_{formatted_datetime}.png')
+        plt.close()
+
+def plot_sfc(ds_sfc, directions, path):
+    for i in range(0, len(ds_sfc.time)):
+        # Slice the dataset to get the data for the current time step
+        ds_sfc_sliced = ds_sfc.isel(time=i)
+        
+        # Slice the dataset to get the data for the region of interest
+        ds_sfc_sliced = ds_sfc_sliced.sel(latitude=slice(directions['North']+5, directions['South']-5), longitude=slice(directions['West']-5, directions['East']+5))
+
+        # Get the variables
+        u_sliced = ds_sfc_sliced['U10N'] # units: m/s
+        v_sliced = ds_sfc_sliced['V10N'] # units: m/s
+        mslp_sliced = ds_sfc_sliced['MSL'].metpy.convert_units('hPa') # units: hPa
+        t_sliced = ds_sfc_sliced['VAR_2T'] # units: K
+        td_sliced = ds_sfc_sliced['VAR_2D'] # units: K
+
+        # Calculate theta-e
+        theta_e = mpcalc.equivalent_potential_temperature(mslp_sliced, t_sliced, td_sliced) # units: K
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_sfc_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Define the color levels and colors for the specific humidity
+        levels = np.arange(250, 350, 5)
+        colors = [
+                '#c3e8fa', '#a6d8f5', '#8bc5e9', '#6fafdb', 
+                '#5195cf', '#4394b5', '#49a283', '#56b36e', 
+                '#6cc04b', '#8cd446', '#aad858', '#d8de5a', 
+                '#f4c54a', '#f8b348', '#f6893b', '#f46328', 
+                '#dc352b', '#bb1b24', '#911618'
+            ]
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot the specific humidity, potential temperature, and wind barbs
+        isobars = plt.contour(mslp_sliced['longitude'], mslp_sliced['latitude'], gaussian_filter(mslp_sliced, sigma=1), colors='black', levels=np.arange(960, 1080, 4), linewidths=1)
+        try:
+            plt.clabel(isobars, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for isobars.")
+        cf = plt.contourf(theta_e['longitude'], theta_e['latitude'], theta_e, cmap=cmap, levels=levels, norm=norm, extend='max')
+        plt.colorbar(cf, orientation='vertical', label='Theta-E (K)', fraction=0.046, pad=0.04)
+
+        # Plot the wind barbs
+        step = 10
+        ax.barbs(u_sliced['longitude'][::step], u_sliced['latitude'][::step], u_sliced[::step, ::step], v_sliced[::step, ::step], length=6, color='black')
+
+        # Adding custom legend entries (hardcoded)
+        mslp_line = plt.Line2D([0], [0], color='black', linewidth=1, label='MSLP (hPa)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[mslp_line], loc='upper right')
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'Surface $\\theta_e$, MSLP, and Winds | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        #plt.show()
+        plt.savefig(f'{path}/thetae_{formatted_datetime}.png')
         plt.close()
