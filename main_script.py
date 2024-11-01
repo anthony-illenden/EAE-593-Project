@@ -1115,3 +1115,85 @@ def plot_250_isotachs_ageo_stream(ds_pl, directions, g, path):
         plt.show()
         #plt.savefig(f'{path}/ageo_{formatted_datetime}.png')
         #plt.close()
+
+def plot_pressure_pert_new(ds_sfc, ds_pl, directions, path, g, threshold):
+    # Loop over the reanlysis time steps
+    for i in range(0, len(ds_sfc.time)):
+        ds_sliced = ds_pl.isel(time=i)
+        ds_sfc_sliced = ds_sfc.isel(time=i)
+        
+        # Slice the dataset to get the data for the region of interest
+        ds_sliced = ds_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+        ds_sfc_sliced = ds_sfc_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+        # Slice the dataset to get the data for the pressure levels between 500 and 1000 hPa
+        u_sliced = ds_sliced['U'].sel(level=slice(500, 1000)) # units: m/s
+        v_sliced = ds_sliced['V'].sel(level=slice(500, 1000)) # units: m/s
+        q_sliced = ds_sliced['Q'].sel(level=slice(500, 1000)) # units: kg/kg
+
+        mslp = ds_sfc_sliced['MSL'] / 100 # units: hPa
+
+        # Flip the order of the pressure levels and convert them to Pa from hPa
+        pressure_levels = u_sliced.level[::-1] * 100 # units: Pa
+
+        # Calculate the integrated vapor transport (IVT) using the u- and v-wind components and the specific humidity
+        u_ivt = -1 / g * np.trapz(u_sliced * q_sliced, pressure_levels, axis=0)
+        v_ivt = -1 / g * np.trapz(v_sliced * q_sliced, pressure_levels, axis=0)
+
+        # Calculate the IVT magnitude
+        ivt = np.sqrt(u_ivt**2 + v_ivt**2)
+
+        # Create an xarray DataArray for the IVT
+        ivt_da = xr.DataArray(ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']})
+
+        mask = ivt_da >= threshold
+        
+
+        # Sice the dataset to get the MSL
+        mslp = ds_sfc_sliced['MSL'] / 100 # units: hPa
+        mslp_filtered = xr.DataArray(mslp, dims=['latitude', 'longitude'], coords={'latitude': mslp['latitude'], 'longitude': mslp['longitude']}).where(mask, drop=True)
+
+        # Calculate pressure perturbation
+        p_pert = mslp_filtered - mslp_filtered.mean()
+
+            # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_sfc_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot 
+        cf = plt.contourf(p_pert['longitude'], p_pert['latitude'], p_pert, cmap='PiYG', levels=np.arange(-6, 6, 1), extend='both')
+        plt.colorbar(cf, orientation='vertical', label='hPa', fraction=0.046, pad=0.04)
+
+        isobars = plt.contour(mslp['longitude'], mslp['latitude'], gaussian_filter(mslp, sigma=1), colors='black', levels=np.arange(960, 1080, 4), linewidths=1)
+        try:
+            plt.clabel(isobars, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for isobars.")
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'ERA5 Reanalysis MSLP Perturbation and Isobars (hPa) | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/pnew_{formatted_datetime}.png')
+        plt.close()
