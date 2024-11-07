@@ -1281,3 +1281,198 @@ def plot_sfc(ds_sfc, directions, path):
         #plt.show()
         plt.savefig(f'{path}/thetae_{formatted_datetime}.png')
         plt.close()
+
+def pressure_lag(ds_sfc, ds_pl, directions, path, g):
+    for i in range(0, len(ds_sfc.time) - 3, 3):  # Step through time indices in increments of 3
+        ds_sfc_old = ds_sfc.isel(time=i)
+        ds_sfc_new = ds_sfc.isel(time=i+3)
+
+        ds_sfc_old_sliced = ds_sfc_old.sel(latitude=slice(directions['North']+5, directions['South']-5), longitude=slice(directions['West']-5, directions['East']+5))
+        ds_sfc_new_sliced = ds_sfc_new.sel(latitude=slice(directions['North']+5, directions['South']-5), longitude=slice(directions['West']-5, directions['East']+5))
+
+        mslp_old_sliced = ds_sfc_old_sliced['MSL'].metpy.convert_units('hPa') # units: hPa
+        mslp_new_sliced = ds_sfc_new_sliced['MSL'].metpy.convert_units('hPa') # units: hPa
+
+        mslp_pert = mslp_new_sliced - mslp_old_sliced
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_sfc_new_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot 
+        cf = plt.contourf(mslp_pert['longitude'], mslp_pert['latitude'], mslp_pert, cmap='PiYG', levels=np.arange(-6, 6, 1), extend='both')
+        plt.colorbar(cf, orientation='vertical', label='hPa', fraction=0.046, pad=0.04)
+
+        c = plt.contour(mslp_pert['longitude'], mslp_pert['latitude'],mslp_pert, colors='black', levels=np.arange(-6, -1, 1), linewidths=1)
+        try:
+            plt.clabel(c, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for isobars.")
+
+        # Adding custom legend entries (hardcoded)
+        mslp_line = plt.Line2D([0], [0], color='black', linewidth=1, label='Pressure Falls (hPa)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[mslp_line], loc='upper right')
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'3-HR MSLP Tendency (hPa) | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.show()
+        #plt.savefig(f'{path}/pnew_{formatted_datetime}.png')
+        #plt.close()
+
+def plot_fgen(g, ds_pl, directions, path):
+    # Loop over the reanlysis time steps
+    for i in range(0, len(ds_pl.time)):
+        # Slice the dataset to get the data for the current time step
+        ds_pl_sliced = ds_pl.isel(time=i)
+        
+        # Slice the dataset to get the data for the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+        # Slice the dataset to get the data for the pressure levels at 850 hPa
+        t_sliced = ds_pl_sliced['T'].sel(level=850) # units: K
+        u_sliced = ds_pl_sliced['U'].sel(level=850) # units: m/s
+        v_sliced = ds_pl_sliced['V'].sel(level=850) # units: m/s
+        q_sliced = ds_pl_sliced['Q'].sel(level=850) * 1000 # units: g/kg
+
+        # Calculate the potential temperature and relative vorticity
+        theta = mpcalc.potential_temperature(850 * units.hPa, t_sliced) # units: K
+        td = mpcalc.dewpoint_from_specific_humidity(850 * units.hPa, t_sliced, q_sliced) # units: K
+        thetae = mpcalc.equivalent_potential_temperature(850 * units.hPa, t_sliced, td) # units: K
+        
+        # Calculate the frontogenesis 
+        fgen = mpcalc.frontogenesis(theta, u_sliced, v_sliced) # units: K m^-1 s^-1
+        convert_to_per_100km_3h = 1000*100*3600*3 # units: K per 100 km 3h
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Smooth the specific humidity and potential temperature
+        q_smoothed = gaussian_filter(q_sliced, sigma=1)
+        theta_smoothed = gaussian_filter(theta, sigma=1)
+        fgen_smoothed = gaussian_filter(fgen, sigma=1)
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        # Plot the specific humidity, potential temperature, and wind barbs
+        #plt.contour(zeta_sliced['longitude'], zeta_sliced['latitude'], zeta_smoothed, colors='purple', levels=np.arange(10 * 10**-5, 30 * 10**-5, 10**-5), linewidths=0.5, label='$\\zeta$')
+        plt.contour(theta['longitude'], theta['latitude'], theta_smoothed, colors='black', levels=np.arange(220, 340, 1), linewidths=0.5, label='$\\theta$')
+        cf = plt.contourf(fgen['longitude'], fgen['latitude'], fgen_smoothed*convert_to_per_100km_3h, cmap=plt.cm.bwr, levels=np.arange(-8, 8.5, 0.5), extend='max')
+        plt.colorbar(cf, orientation='vertical', label='FGEN (K/100km/3hr)', fraction=0.046, pad=0.04)
+
+        # Plot the 850-hPa wind barbs
+        step = 10
+        ax.barbs(u_sliced['longitude'][::step], u_sliced['latitude'][::step], u_sliced[::step, ::step], v_sliced[::step, ::step], length=6, color='black')
+
+        # Adding custom legend entries (hardcoded)
+        theta_line = plt.Line2D([0], [0], color='black', linewidth=1, label=r'$\theta$ Potential Temperature (K)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[theta_line], loc='upper right')
+
+        # Add the title, set the map extent, and add map features
+        plt.title(f'ERA5 Reanalysis 850-hPa FGEN, $\\theta$, and Wind Barbs | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=True, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        lon_formatter = LongitudeFormatter(zero_direction_label=True)
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        #plt.show()
+        plt.savefig(f'{path}/Fgen_{formatted_datetime}.png')
+        #plt.close()
+
+def plot_thetae_grad(g, ds_pl, directions, path):
+    # Loop over the reanalysis time steps
+    for i in range(0, len(ds_pl.time)):
+        # Slice the dataset to get the data for the current time step
+        ds_pl_sliced = ds_pl.isel(time=i)
+        
+        # Slice the dataset to get the data for the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), 
+                                        longitude=slice(directions['West'], directions['East']))
+
+        # Slice the dataset to get the data for the pressure level at 850 hPa
+        t_sliced = ds_pl_sliced['T'].sel(level=850)  # Temperature in K
+        q_sliced = ds_pl_sliced['Q'].sel(level=850) * 1000  # Specific humidity in g/kg
+
+        # Calculate the potential temperature and equivalent potential temperature
+        theta = mpcalc.potential_temperature(850 * units.hPa, t_sliced)  # Potential temperature
+        td = mpcalc.dewpoint_from_specific_humidity(850 * units.hPa, t_sliced, q_sliced)  # Dewpoint
+        thetae = mpcalc.equivalent_potential_temperature(850 * units.hPa, t_sliced, td)  # θe
+
+        # Calculate the gradient of thetae in both x and y directions
+        dx, dy = mpcalc.lat_lon_grid_deltas(ds_pl_sliced.longitude.values, ds_pl_sliced.latitude.values) # units: degrees
+        grad_thetae_x, grad_thetae_y = mpcalc.gradient(thetae, deltas=(dx, dy)) # units: K/m
+        
+        # Calculate the magnitude of the thetae gradient
+        thetae_gradient = np.sqrt(grad_thetae_x**2 + grad_thetae_y**2)
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        cf = plt.contourf(ds_pl_sliced['longitude'], ds_pl_sliced['latitude'], thetae_gradient, cmap=plt.cm.cool, levels=np.arange(0, 0.5, 0.05), extend='max')
+        plt.colorbar(cf, orientation='vertical', label='$\\theta_e$ (K/m)', fraction=0.046, pad=0.04)
+
+        plt.title(f'ERA5 Reanalysis 850-hPa $\\theta_e$ Gradient | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=True, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        lon_formatter = LongitudeFormatter(zero_direction_label=True)
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.show()
+        #plt.savefig(f'{path}/Fgen_{formatted_datetime}.png')
