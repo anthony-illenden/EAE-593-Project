@@ -1476,3 +1476,232 @@ def plot_thetae_grad(g, ds_pl, directions, path):
         formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
         plt.show()
         #plt.savefig(f'{path}/Fgen_{formatted_datetime}.png')
+
+def fgen_pv_cross_section(start_point, end_point, ds_pl, ds_sfc, directions, g, path):
+       # Loop over the reanalysis time steps
+    for i in range(0, len(ds_pl.time.values)):
+        ds_pl_sliced = ds_pl.isel(time=i)
+        ds_sfc_sliced = ds_sfc.isel(time=i)
+
+        # Slice the dataset to get the data for the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+        ds_sfc_sliced = ds_sfc_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+        # Slice the dataset to get the data for the pressure level at 250 hPa
+        u_sliced = ds_pl_sliced['U'].sel(level=slice(150, 1000)) # units: m/s
+        v_sliced = ds_pl_sliced['V'].sel(level=slice(150, 1000)) # units: m/s
+        q_sliced = ds_pl_sliced['Q'].sel(level=slice(150, 1000)) # units: kg/kg
+        t_sliced = ds_pl_sliced['T'].sel(level=slice(150, 1000)) # units: K
+        pressure_levels = q_sliced.level.metpy.convert_units('hPa') # units: hPa
+
+        # Calculate the potential temperature and frontogenesis
+        theta = mpcalc.potential_temperature(pressure_levels * units.hPa, t_sliced) # units: K
+        fgen = mpcalc.frontogenesis(theta, u_sliced, v_sliced) # units: K m^-1 s^-1
+        fgen_3hr = fgen * 1.08e9 # units: K per 100 km 3h
+
+        # Create an xarray DataArray for the IVT
+        theta_da = xr.DataArray(theta, dims=['level', 'latitude', 'longitude'],
+                                coords={'level': t_sliced['level'], 
+                                        'latitude': t_sliced['latitude'], 
+                                        'longitude': t_sliced['longitude']},
+                                attrs={'units': 'K'})
+
+        ds_pl_sliced['THETA'] = theta
+        # Add the frontogenesis field to the dataset with the same structure
+        fgen_da = xr.DataArray(fgen_3hr, dims=['level', 'latitude', 'longitude'],
+                            coords={'level': t_sliced['level'], 
+                                    'latitude': t_sliced['latitude'], 
+                                    'longitude': t_sliced['longitude']},
+                            attrs={'units': 'K / 100km / hr'})
+
+        # Add FGEN to the original dataset as a new variable
+        ds_pl_sliced['FGEN'] = fgen_da
+
+        pressure_levels_ivt = u_sliced.level[::-1] * 100 # units: Pa
+
+        # Get the lats and lons
+        lats = u_sliced['latitude'][:]
+        lons = u_sliced['longitude'][:] 
+
+        # Calculate the integrated vapor transport (IVT) using the u- and v-wind components and the specific humidity
+        u_ivt = -1 / g * np.trapz(u_sliced * q_sliced, pressure_levels_ivt, axis=0)
+        v_ivt = -1 / g * np.trapz(v_sliced * q_sliced, pressure_levels_ivt, axis=0)
+
+        # Calculate the IVT magnitude
+        ivt = np.sqrt(u_ivt**2 + v_ivt**2)
+
+        # Create an xarray DataArray for the IVT
+        ivt_da = xr.DataArray(ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']})
+
+        # Define the color levels and colors for the IVT plot
+        ivt_levels = [250, 300, 400, 500, 600, 700, 800, 1000, 1200, 1400, 1600, 1800]
+        ivt_colors = ['#ffff00', '#ffe400', '#ffc800', '#ffad00', '#ff8200', '#ff5000', '#ff1e00', '#eb0010', '#b8003a', '#850063', '#570088']
+        ivt_cmap = mcolors.ListedColormap(ivt_colors)
+        ivt_norm = mcolors.BoundaryNorm(ivt_levels, ivt_cmap.N)
+
+        # Mask the IVT values below 250 kg/m/s and create a filtered DataArray for the u- and v-wind components
+        mask = ivt_da >= 250
+        u_ivt_filtered = xr.DataArray(u_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+        v_ivt_filtered = xr.DataArray(v_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        lat_values = np.linspace(start_point[0], end_point[0])
+        lon_values = np.linspace(start_point[1], end_point[1])
+        x = xr.DataArray(lon_values, dims='Lat_Lon')
+        y = xr.DataArray(lat_values, dims='Lat_Lon')
+        ds_cross = ds_pl_sliced.interp(longitude=x, latitude=y, method='nearest')
+
+        pv_crossed = ds_cross['PV'].sel(level=slice(150, 1000)) # units: K
+        fgen_crossed = ds_cross['FGEN'].sel(level=slice(150, 1000)) # units: K
+        theta_crossed = ds_cross['THETA'].sel(level=slice(150, 1000)) # units: K
+        pressure_levels = pv_crossed['level'] # units: hPa
+
+        # Define the color levels and colors for the potential vorticity
+        levels = np.arange(0, 3.26, 0.25)
+        colors = ['white', '#d1e9f7', '#a5cdec', '#79a3d5', '#69999b', '#78af58', '#b0cc58', '#f0d95f', '#de903e', '#cb5428', '#b6282a', '#9b1622', '#7a1419']
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Smooth the PV and potential temperature 
+        pv_smoothed = gaussian_filter(pv_crossed, sigma=1)
+        theta_smoothed = gaussian_filter(theta_crossed, sigma=1)
+        fgen_smoothed = gaussian_filter(fgen_crossed, sigma=1)
+
+        # Create the figure 
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Plot the isentropes and potential vorticity 
+        isentropes = ax.contour(ds_cross['longitude'], pressure_levels, theta_smoothed, colors='black', levels=np.arange(250, 450, 1))
+        ax.clabel(isentropes, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        fgen_c = ax.contour(ds_cross['longitude'], pressure_levels, fgen_crossed, colors='magenta', levels=np.arange(1, 40, 1), linestyles='solid')
+        ax.clabel(fgen_c, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        pv_cf = ax.contourf(ds_cross['longitude'], pressure_levels, pv_smoothed * 1e6, cmap=cmap, levels=levels, norm=norm, extend='max')
+        plt.colorbar(pv_cf, orientation='vertical', label='PV (m$^2$ s$^{-1}$ K kg$^{-1}$)', fraction=0.046, pad=0.04)
+
+        # Adding the isentropes to the legend with a custom label
+        theta_line = plt.Line2D([0], [0], color='black', linewidth=1, label=r'$\theta$ Equivalent Potential Temperature (K)')
+        fgen_line = plt.Line2D([0], [0], color='black', linewidth=1, linestyle='dashed', label='FGEN (K / 100km / 3hr)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[theta_line, fgen_line], loc='upper right')
+        ax.set_yticks(pressure_levels)
+        ax.set_yticklabels(list(pressure_levels.values))
+        plt.ylim(1000, 600)
+        plt.xlabel('Longitude')
+        plt.ylabel('Pressure (hPa)')
+        plt.title(f'ERA5 Reanalysis Vertical Cross-Section of PV, FGEN, and $\\theta$ | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}')
+
+        # Manually set y-axis tick marks
+        custom_ticks = [1000, 900, 800, 700, 600]  
+        ax.set_yticks(custom_ticks)
+        ax.set_yticklabels([str(tick) for tick in custom_ticks])
+
+        # Add labels "A" and "A'" to the bottom left and right
+        ax.text(0, -0.1, 'A', transform=ax.transAxes, fontsize=12, verticalalignment='bottom', horizontalalignment='left', fontweight='bold')
+        ax.text(1, -0.1, "A'", transform=ax.transAxes, fontsize=12, verticalalignment='bottom', horizontalalignment='right', fontweight='bold')
+
+        # Add an inset of the plan view to provide additional context 
+        ax_inset = fig.add_axes([0.10, 0.63, 0.25, 0.25], projection=ccrs.PlateCarree())
+        ax_inset.set_extent([directions['East'], directions['West'], directions['South'], directions['North']])
+        ax_inset.add_feature(cfeature.COASTLINE.with_scale('50m'), linewidth=0.5)
+        ax_inset.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax_inset.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax_inset.add_feature(cfeature.OCEAN, color='white')
+        ax_inset.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax_inset.add_feature(cfeature.LAND, color='#fbf5e9')
+        ax_inset.plot([start_point[1], end_point[1]], [start_point[0], end_point[0]],
+                            color="black", marker="o", transform=ccrs.PlateCarree())
+        # Add text annotations
+        ax_inset.text(start_point[1], start_point[0], "A", transform=ccrs.PlateCarree(),
+                    verticalalignment='bottom', horizontalalignment='right', fontweight='bold', fontsize=12)
+        ax_inset.text(end_point[1], end_point[0], "A'", transform=ccrs.PlateCarree(),
+                    verticalalignment='bottom', horizontalalignment='right', fontweight='bold', fontsize=12)
+
+        c = ax_inset.contour(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), colors='black', levels=ivt_levels, linewidths=0.5)
+        cf = ax_inset.contourf(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), cmap=ivt_cmap, levels=ivt_levels, norm=ivt_norm, extend='max')
+
+        # Plot the IVT vectors
+        step = 5 
+        plt.quiver(u_ivt_filtered['longitude'][::step], u_ivt_filtered['latitude'][::step], u_ivt_filtered[::step, ::step], v_ivt_filtered[::step, ::step], scale=500,scale_units='xy', color='black')
+
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        #plt.show()
+        plt.savefig(f'{path}/fgen_cross_{formatted_datetime}.png')
+
+def plot_new_thetae_grad(ds_sfc, ds_pl, directions, path, g):
+    # Loop over the reanlysis time steps
+    for i in range(0, len(ds_sfc.time)):
+        ds_sliced = ds_pl.isel(time=i)
+        ds_sfc_sliced = ds_sfc.isel(time=i)
+        
+        # Slice the dataset to get the data for the region of interest
+        ds_sliced = ds_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+        ds_sfc_sliced = ds_sfc_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+        # Slice the dataset to get the data for the pressure levels between 500 and 1000 hPa
+        u_sliced = ds_sliced['U'].sel(level=slice(500, 1000)) # units: m/s
+        v_sliced = ds_sliced['V'].sel(level=slice(500, 1000)) # units: m/s
+        q_sliced = ds_sliced['Q'].sel(level=slice(500, 1000)) # units: kg/kg
+        t_sliced = ds_sliced['T'].sel(level=slice(500, 1000))
+
+        mslp = ds_sfc_sliced['MSL'] / 100 # units: hPa
+        mslp_smoothed = gaussian_filter(mslp, sigma=1)
+
+        # Flip the order of the pressure levels and convert them to Pa from hPa
+        pressure_levels = u_sliced.level[::-1].metpy.convert_units('hPa')  # units: hPa
+
+        # Calculate dewpoint and theta-e
+        td = mpcalc.dewpoint_from_specific_humidity(pressure_levels * units.hPa, t_sliced, q_sliced)
+        theta_e = mpcalc.equivalent_potential_temperature(pressure_levels * units.hPa, t_sliced, t_sliced) # units: K
+
+        theta_e_925 = theta_e.sel(level=925)
+
+        # Extract latitude and longitude arrays from the dataset
+        latitudes = theta_e_925['latitude'].values * units.degrees
+        longitudes = theta_e_925['longitude'].values * units.degrees
+
+        # Compute the gradient of theta_e_925
+        dtheta_e_dy, dtheta_e_dx = mpcalc.gradient(theta_e_925, coordinates=(latitudes, longitudes))
+
+        # Calculate the magnitude of the gradient
+        gradient_magnitude = np.sqrt(dtheta_e_dx**2 + dtheta_e_dy**2)
+
+        time = ds_sfc_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+        # Plot the gradient magnitude using contourf
+        magnitude_contour = ax.contourf(theta_e_925['longitude'], theta_e_925['latitude'], gradient_magnitude, levels=np.arange(5, 21, 1), cmap='jet', extend='max')
+        plt.colorbar(magnitude_contour, ax=ax, orientation='vertical', label=r"$|\nabla \theta_e|$ (K/m)", fraction=0.046, pad=0.04)
+        # Plot the specific humidity, potential temperature, and wind barbs
+        isobars = plt.contour(mslp['longitude'], mslp['latitude'], mslp_smoothed, colors='black', levels=np.arange(960, 1080, 4), linewidths=1)
+        try:
+            plt.clabel(isobars, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for isobars.")
+
+        plt.title(f'ERA5 Reanalysis MSLP and 925-hPa $\\theta_e$ Gradient | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=True, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        lon_formatter = LongitudeFormatter(zero_direction_label=True)
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/{formatted_datetime}.png')
+
+
