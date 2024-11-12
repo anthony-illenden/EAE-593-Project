@@ -1705,3 +1705,113 @@ def plot_new_thetae_grad(ds_sfc, ds_pl, directions, path, g):
         plt.savefig(f'{path}/{formatted_datetime}.png')
 
 
+def plot_ivt_panel(g, ds_pl, ds_sfc, directions, path):
+    # Define the time steps you want to plot (18-21)
+    time_steps = [18, 19, 20, 21]
+
+    # Create the figure with 4 subplots
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12), subplot_kw={'projection': ccrs.PlateCarree()})
+
+    # Flatten axes for easy indexing
+    axes = axes.flatten()
+
+    # Loop over the selected time steps (18-21)
+    for idx, time_idx in enumerate(time_steps):
+        # Slice the dataset to get the data for the current time step
+        ds_sliced = ds_pl.isel(time=time_idx)
+        ds_sfc_sliced = ds_sfc.isel(time=time_idx)
+
+        # Slice the dataset to get the data for the region of interest
+        ds_sliced = ds_sliced.sel(latitude=slice(directions['North'], directions['South']),
+                                longitude=slice(directions['West'], directions['East']))
+        ds_sfc_sliced = ds_sfc_sliced.sel(latitude=slice(directions['North'], directions['South']),
+                                        longitude=slice(directions['West'], directions['East']))
+
+        # Slice the dataset to get the data for the pressure levels between 500 and 1000 hPa
+        u_sliced = ds_sliced['U'].sel(level=slice(500, 1000))  # units: m/s
+        v_sliced = ds_sliced['V'].sel(level=slice(500, 1000))  # units: m/s
+        q_sliced = ds_sliced['Q'].sel(level=slice(500, 1000))  # units: kg/kg
+        mslp = ds_sfc_sliced['MSL'] / 100  # units: hPa
+
+        # Flip the order of the pressure levels and convert them to Pa from hPa
+        pressure_levels = u_sliced.level[::-1] * 100  # units: Pa
+
+        # Calculate the integrated vapor transport (IVT) using the u- and v-wind components and the specific humidity
+        u_ivt = -1 / g * np.trapz(u_sliced * q_sliced, pressure_levels, axis=0)
+        v_ivt = -1 / g * np.trapz(v_sliced * q_sliced, pressure_levels, axis=0)
+
+        # Calculate the IVT magnitude
+        ivt = np.sqrt(u_ivt**2 + v_ivt**2)
+
+        # Create an xarray DataArray for the IVT
+        ivt_da = xr.DataArray(ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']})
+
+        # Define the color levels and colors for the IVT plot
+        levels = [250, 300, 400, 500, 600, 700, 800, 1000, 1200, 1400, 1600, 1800]
+        colors = ['#ffff00', '#ffe400', '#ffc800', '#ffad00', '#ff8200', '#ff5000', '#ff1e00', '#eb0010', '#b8003a', '#850063', '#570088']
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Get the current axis for plotting
+        ax = axes[idx]
+
+        # Plot the IVT
+        c = ax.contour(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), colors='black', levels=levels, linewidths=0.5)
+        cf = ax.contourf(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), cmap=cmap, levels=levels, norm=norm, extend='max')
+
+        # Mask the IVT values below 250 kg/m/s and create a filtered DataArray for the u- and v-wind components
+        mask = ivt_da >= 250
+        u_ivt_filtered = xr.DataArray(u_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+        v_ivt_filtered = xr.DataArray(v_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+
+        # Plot the IVT vectors
+        step = 5 
+        ax.quiver(u_ivt_filtered['longitude'][::step], u_ivt_filtered['latitude'][::step], u_ivt_filtered[::step, ::step], v_ivt_filtered[::step, ::step], scale=500, scale_units='xy', color='black')
+
+        isobars = ax.contour(mslp['longitude'], mslp['latitude'], gaussian_filter(mslp, sigma=1), colors='black', levels=np.arange(960, 1080, 4), linewidths=0.5)
+        try:
+            ax.clabel(isobars, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label for isobars.")
+
+        # Adding custom legend entries (hardcoded)
+        isobars_line = plt.Line2D([0], [0], color='black', linewidth=1, label='MSLP (hPa)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[isobars_line], loc='upper right')
+
+        # Add the title, set the map extent, and add map features        
+        ax.set_title(f'{int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=12, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='#ecf9fd')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+        gls = ax.gridlines(draw_labels=False, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        ax.set_xticks(ax.get_xticks(), crs=ccrs.PlateCarree())
+        ax.set_yticks(ax.get_yticks(), crs=ccrs.PlateCarree())
+        lon_formatter = LongitudeFormatter()
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+    # Add the overall suptitle for the figure
+    #fig.suptitle('ERA5 Integrated Water Vapor Transport and MSLP', fontsize=16, weight='bold')
+
+    # Add a colorbar to the right of the figure
+    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])  # Position the colorbar on the right
+    plt.colorbar(cf, cax=cbar_ax, orientation='vertical', label='IVT (kg/m/s)', fraction=0.05, pad=0.04)
+
+
+    # Tight layout to adjust the subplots and save the figure
+    #plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust for suptitle space
+    #plt.tight_layout()
+    plt.savefig(f'{path}/ivt_18-21.pdf', format='pdf')
+    plt.close()
