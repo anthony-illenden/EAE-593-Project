@@ -1815,3 +1815,154 @@ def plot_ivt_panel(g, ds_pl, ds_sfc, directions, path):
     #plt.tight_layout()
     plt.savefig(f'{path}/ivt_18-21.pdf', format='pdf')
     plt.close()
+
+def plot_pv_vadv(start_point, end_point, ds_pl, directions, g, path):
+     # Loop over the reanalysis time steps
+    for i in range(0, len(ds_pl.time.values)):
+        ds_pl_sliced = ds_pl.isel(time=i)
+
+        # Slice the dataset to get the data for the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+        # Get the u, v, t, and q fields at multiple levels
+        u_sliced = ds_pl_sliced['U'].sel(level=slice(150, 1000)) # units: m/s
+        v_sliced = ds_pl_sliced['V'].sel(level=slice(150, 1000)) # units: m/s
+        w_sliced = ds_pl_sliced['W'].sel(level=slice(150, 1000)) # units: pa/s
+        t_sliced = ds_pl_sliced['T'].sel(level=slice(150, 1000)) # units: K
+        q_sliced = ds_pl_sliced['Q'].sel(level=slice(150, 1000)) # units: kg/kg
+        pv_sliced = ds_pl_sliced['PV'].sel(level=slice(150, 1000)) # units: PVU
+        pressure_levels = t_sliced['level'] # units: 
+        pressure_levels_ivt = u_sliced.level[::-1] * 100 # units: Pa
+
+        # Calculate potential temperature
+        theta = mpcalc.potential_temperature(pressure_levels, t_sliced) # units: K
+        pv_vertical_adv = mpcalc.advection(pv_sliced, w_sliced) * 3600 # units: PVU/hr
+
+        # Add the potential temperature (theta) to the dataset
+        theta_da = xr.DataArray(theta, dims=['level', 'latitude', 'longitude'],
+                                coords={'level': t_sliced['level'], 
+                                        'latitude': t_sliced['latitude'], 
+                                        'longitude': t_sliced['longitude']},
+                                attrs={'units': 'K'})
+
+        ds_pl_sliced['THETA'] = theta_da
+
+        pv_vadv_da = xr.DataArray(pv_vertical_adv, dims=['level', 'latitude', 'longitude'],
+                                coords={'level': t_sliced['level'], 
+                                        'latitude': t_sliced['latitude'], 
+                                        'longitude': t_sliced['longitude']},
+                                attrs={'units': 'K'})
+
+        ds_pl_sliced['PV_VADV'] = pv_vadv_da
+
+        lats = u_sliced['latitude'][:]
+        lons = u_sliced['longitude'][:] 
+
+
+        # Calculate the integrated vapor transport (IVT) using the u- and v-wind components and the specific humidity
+        u_ivt = -1 / g * np.trapz(u_sliced * q_sliced, pressure_levels_ivt, axis=0)
+        v_ivt = -1 / g * np.trapz(v_sliced * q_sliced, pressure_levels_ivt, axis=0)
+
+        # Calculate the IVT magnitude
+        ivt = np.sqrt(u_ivt**2 + v_ivt**2)
+
+        # Create an xarray DataArray for the IVT
+        ivt_da = xr.DataArray(ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']})
+
+        # Define the color levels and colors for the IVT plot
+        ivt_levels = [250, 300, 400, 500, 600, 700, 800, 1000, 1200, 1400, 1600, 1800]
+        ivt_colors = ['#ffff00', '#ffe400', '#ffc800', '#ffad00', '#ff8200', '#ff5000', '#ff1e00', '#eb0010', '#b8003a', '#850063', '#570088']
+        ivt_cmap = mcolors.ListedColormap(ivt_colors)
+        ivt_norm = mcolors.BoundaryNorm(ivt_levels, ivt_cmap.N)
+
+        # Mask the IVT values below 250 kg/m/s and create a filtered DataArray for the u- and v-wind components
+        mask = ivt_da >= 250
+        u_ivt_filtered = xr.DataArray(u_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+        v_ivt_filtered = xr.DataArray(v_ivt, dims=['latitude', 'longitude'], coords={'latitude': u_sliced['latitude'], 'longitude': u_sliced['longitude']}).where(mask, drop=True)
+
+        # Get the time of the current time step and create a pandas DatetimeIndex
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Now do the cross-section interpolation
+        lat_values = np.linspace(start_point[0], end_point[0])
+        lon_values = np.linspace(start_point[1], end_point[1])
+        x = xr.DataArray(lon_values, dims='Lat_Lon')
+        y = xr.DataArray(lat_values, dims='Lat_Lon')
+        
+        # Interpolate the sliced data for the cross-section
+        ds_cross = ds_pl_sliced.interp(longitude=x, latitude=y, method='nearest')
+
+        # Get the temperature, potential vorticity, and theta 
+        pv_crossed = ds_cross['PV'].sel(level=slice(150, 1000)) # units: K
+        theta_crossed = ds_cross['THETA'].sel(level=slice(150, 1000)) # units: K
+        pv_vadv_crossed = ds_cross['PV_VADV'].sel(level=slice(150, 1000))
+
+        # Get the pressure levels
+        pressure_levels = pv_crossed['level'] # units: hPa
+
+        # Define the color levels and colors for the potential vorticity
+        levels = np.arange(0, 3.26, 0.25)
+        colors = ['white', '#d1e9f7', '#a5cdec', '#79a3d5', '#69999b', '#78af58', '#b0cc58', '#f0d95f', '#de903e', '#cb5428', '#b6282a', '#9b1622', '#7a1419']
+        cmap = mcolors.ListedColormap(colors)
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+        # Smooth the PV and potential temperature 
+        pv_smoothed = gaussian_filter(pv_crossed, sigma=1)
+        theta_smoothed = gaussian_filter(theta_crossed, sigma=1)
+        pv_vadv_smoothed = gaussian_filter(pv_vadv_crossed, sigma=1)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Plot the isentropes and potential vorticity 
+        cf = ax.contourf(ds_cross['longitude'], pressure_levels, pv_vadv_smoothed * 1e6, cmap='RdBu_r', levels = np.arange(-0.05, 0.05, 0.001) ,extend='both')
+        cbar = plt.colorbar(cf, orientation='vertical', label='PVU * Pa/Hr', fraction=0.046, pad=0.04)
+
+        # Creating the legend with the custom entries
+        ax.set_yticks(pressure_levels)
+        ax.set_yticklabels(list(pressure_levels.values))
+        plt.ylim(1000, 600)
+        plt.xlabel('Longitude (degrees E)')
+        plt.ylabel('Pressure (hPa)')
+        plt.title(f'ERA5 Reanalysis Vertical Cross-Section of PV Vertical Advection | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}')
+
+        # Manually set y-axis tick marks
+        custom_ticks = [1000, 900, 800, 700, 600]  
+        ax.set_yticks(custom_ticks)
+        ax.set_yticklabels([str(tick) for tick in custom_ticks])
+
+        # Add labels "A" and "A'" to the bottom left and right
+        ax.text(0, -0.1, 'A', transform=ax.transAxes, fontsize=12, verticalalignment='bottom', horizontalalignment='left', fontweight='bold')
+        ax.text(1, -0.1, "A'", transform=ax.transAxes, fontsize=12, verticalalignment='bottom', horizontalalignment='right', fontweight='bold')
+
+        # Add an inset of the plan view to provide additional context 
+        ax_inset = fig.add_axes([0.10, 0.63, 0.25, 0.25], projection=ccrs.PlateCarree())
+        ax_inset.set_extent([directions['East'], directions['West'], directions['South'], directions['North']])
+        ax_inset.add_feature(cfeature.COASTLINE.with_scale('50m'), linewidth=0.5)
+        ax_inset.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax_inset.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax_inset.add_feature(cfeature.OCEAN, color='white')
+        ax_inset.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax_inset.add_feature(cfeature.LAND, color='#fbf5e9')
+        ax_inset.plot([start_point[1], end_point[1]], [start_point[0], end_point[0]],
+                            color="black", marker="o", transform=ccrs.PlateCarree())
+        # Add text annotations
+        ax_inset.text(start_point[1], start_point[0], "A", transform=ccrs.PlateCarree(),
+                    verticalalignment='bottom', horizontalalignment='right', fontweight='bold', fontsize=12)
+        ax_inset.text(end_point[1], end_point[0], "A'", transform=ccrs.PlateCarree(),
+                    verticalalignment='bottom', horizontalalignment='right', fontweight='bold', fontsize=12)
+
+        #isohypses = ax_inset.contour(z_500['longitude'], z_500['latitude'], z_500, colors='black', levels=np.arange(5000, 6000, 50), linewidths=1)
+        #isobars = ax_inset.contour(mslp['longitude'], mslp['latitude'], gaussian_filter(mslp, sigma=1), colors='black', levels=np.arange(960, 1040, 4), linewidths=0.25)
+        #plt.clabel(isobars, inline=True, inline_spacing=5, fontsize=6, fmt='%i')
+        c = ax_inset.contour(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), colors='black', levels=ivt_levels, linewidths=0.5)
+        cf = ax_inset.contourf(ivt_da['longitude'], ivt_da['latitude'], gaussian_filter(ivt_da, sigma=1), cmap=ivt_cmap, levels=ivt_levels, norm=ivt_norm, extend='max')
+
+        # Plot the IVT vectors
+        step = 5 
+        plt.quiver(u_ivt_filtered['longitude'][::step], u_ivt_filtered['latitude'][::step], u_ivt_filtered[::step, ::step], v_ivt_filtered[::step, ::step], scale=500,scale_units='xy', color='black')
+
+        #plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/pv_vadv_{formatted_datetime}.png')
+        plt.close()
