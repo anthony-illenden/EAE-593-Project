@@ -204,17 +204,23 @@ def plot_vorticity_adv(g, ds_pl, directions, path):
 def plot_250_isotachs(ds_pl, directions, g, path):
     # Loop over the reanalysis time steps
     for i in range(0, len(ds_pl.time.values)):
-        # Slice the dataset to get the data for the current time step
         ds_pl_sliced = ds_pl.isel(time=i)
 
         # Slice the dataset to get the data for the region of interest
         ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
         
         # Slice the dataset to get the data for the pressure level at 250 hPa
-        u_250 = ds_pl_sliced['U'].sel(level=250) # units: m/s
-        v_250 = ds_pl_sliced['V'].sel(level=250) # units: m/s
-        z_250 = ds_pl_sliced['Z'].sel(level=250) / g # units: m
+        u_250 = ds_pl_sliced['U'].sel(level=250) * units.meter / units.second # units: m/s
+        v_250 = ds_pl_sliced['V'].sel(level=250) * units.meter / units.second  # units: m/s
+        gp = ds_pl_sliced['Z'] * (units.meter**2) / (units.second**2) # units: m
+        gph = gp / (g * units.meter / (units.second**2))
         pressure_levels = u_250.level * 100 # units: Pa
+
+        # Geopotential Height
+        gph_250 = gph.sel(level=250) # units: m
+
+        # Calculate the thickness of the layer between 1000 and 500 hPa
+        thickness = gph.sel(level=500) - gph.sel(level=1000)
 
         # Calculate the wind speed at 250 hPa
         wind_speed_250 = np.sqrt(u_250**2 + v_250**2)
@@ -224,7 +230,8 @@ def plot_250_isotachs(ds_pl, directions, g, path):
         int_datetime_index = pd.DatetimeIndex([time])
 
         # Smooth the mslp and wind speed
-        z_smoothed = gaussian_filter(z_250, sigma=3)
+        geopotential_height_smoothed = gaussian_filter(gph_250, sigma=3)
+        thickness_smoothed = gaussian_filter(thickness, sigma=3)
         wnd_smoothed = gaussian_filter(wind_speed_250, sigma=3)
 
         # Define the color levels and colors for the isotachs
@@ -237,17 +244,28 @@ def plot_250_isotachs(ds_pl, directions, g, path):
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
 
         # Plot the geopotential heights and isotachs
-        isohypses = plt.contour(z_250['longitude'], z_250['latitude'], z_smoothed, colors='black', levels=np.arange(8700, 11820, 60), linewidths=1)
+        isohypses = plt.contour(gph_250['longitude'], gph_250['latitude'], geopotential_height_smoothed, colors='black', levels=np.arange(8700, 11820, 60), linewidths=1)
         try:
             ax.clabel(isohypses, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+        except IndexError:
+            print("No contours to label.")
+        thickness_c = plt.contour(thickness['longitude'], thickness['latitude'], thickness_smoothed, colors='red', levels=np.arange(4000,7000,100), linewidths=2, linestyles='dashed')
+        try:
+            ax.clabel(thickness_c, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
         except IndexError:
             print("No contours to label.")
         cf = plt.contourf(u_250['longitude'], u_250['latitude'], wnd_smoothed, cmap=cmap, norm=norm, levels=levels, extend='max')
         plt.colorbar(cf, orientation='vertical', label='Wind Speed (ms$^{-1}$)', fraction=0.046, pad=0.04)
 
-
         step = 10
         ax.barbs(u_250['longitude'][::step], u_250['latitude'][::step], u_250[::step, ::step], v_250[::step, ::step], length=6, color='black')
+
+        # Adding custom legend entries (hardcoded)
+        isohypse_line = plt.Line2D([0], [0], color='black', linewidth=1, label='Geopotential Height (m)')
+        thickness_lines = plt.Line2D([0], [0], color='red', linestyle = "dashed", linewidth=1, label='1000-500 hPa Thickness (m)')
+
+        # Creating the legend with the custom entries
+        ax.legend(handles=[isohypse_line, thickness_lines], loc='upper right')
 
         # Add the title, set the map extent, and add map features
         plt.title(f'ERA5 Reanalysis 250-hPa Isoatachs, Geopotential Height, and Barbs | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
