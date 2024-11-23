@@ -1707,7 +1707,7 @@ def plot_new_thetae_grad(ds_sfc, ds_pl, directions, path, g):
 
 def plot_ivt_panel(g, ds_pl, ds_sfc, directions, path):
     # Define the time steps you want to plot (18-21)
-    time_steps = [18, 19, 20, 21]
+    time_steps = [8, 9, 10, 11]
 
     # Create the figure with 4 subplots
     fig, axes = plt.subplots(2, 2, figsize=(15, 12), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -1966,3 +1966,84 @@ def plot_pv_vadv(start_point, end_point, ds_pl, directions, g, path):
         formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
         plt.savefig(f'{path}/pv_vadv_{formatted_datetime}.png')
         plt.close()
+
+def theta_pv_cross_section_2x2(start_point, end_point, ds_pl, directions, g, path, y_limits=(1000, 600)):
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    axes = axes.flatten()  # Flatten to easily iterate
+    times_to_plot = [8, 9, 10, 11]  # Specify hours to plot
+
+    # Define custom y-axis ticks
+    custom_ticks = [1000, 900, 800, 700, 600]
+    
+    for idx, hour in enumerate(times_to_plot):
+        ax = axes[idx]
+        
+        # Select the time slice
+        ds_pl_sliced = ds_pl.isel(time=hour)
+
+        # Slice the dataset to the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']),
+                                        longitude=slice(directions['West'], directions['East']))
+
+        # Get fields and calculate potential temperature
+        u_sliced = ds_pl_sliced['U'].sel(level=slice(150, 1000))
+        v_sliced = ds_pl_sliced['V'].sel(level=slice(150, 1000))
+        t_sliced = ds_pl_sliced['T'].sel(level=slice(150, 1000))
+        q_sliced = ds_pl_sliced['Q'].sel(level=slice(150, 1000))
+        pressure_levels = t_sliced['level']
+
+        theta = mpcalc.potential_temperature(pressure_levels, t_sliced)
+        theta_da = xr.DataArray(theta, dims=['level', 'latitude', 'longitude'],
+                                coords={'level': t_sliced['level'], 
+                                        'latitude': t_sliced['latitude'], 
+                                        'longitude': t_sliced['longitude']},
+                                attrs={'units': 'K'})
+        ds_pl_sliced['THETA'] = theta_da
+
+        # Interpolate for the cross-section
+        lat_values = np.linspace(start_point[0], end_point[0])
+        lon_values = np.linspace(start_point[1], end_point[1])
+        x = xr.DataArray(lon_values, dims='Lat_Lon')
+        y = xr.DataArray(lat_values, dims='Lat_Lon')
+        ds_cross = ds_pl_sliced.interp(longitude=x, latitude=y, method='nearest')
+
+        pv_crossed = ds_cross['PV'].sel(level=slice(150, 1000))
+        theta_crossed = ds_cross['THETA'].sel(level=slice(150, 1000))
+
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        # Smooth PV and theta for plotting
+        pv_smoothed = gaussian_filter(pv_crossed, sigma=1)
+        theta_smoothed = gaussian_filter(theta_crossed, sigma=1)
+
+        # Plot cross-section
+        levels = np.arange(0, 3.26, 0.25)
+        cmap = mcolors.ListedColormap(['white', '#d1e9f7', '#a5cdec', '#79a3d5', '#69999b', 
+                                       '#78af58', '#b0cc58', '#f0d95f', '#de903e', '#cb5428', 
+                                       '#b6282a', '#9b1622', '#7a1419'])
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+        
+        pv_cf = ax.contourf(ds_cross['longitude'], pressure_levels, pv_smoothed * 1e6, cmap=cmap, 
+                            levels=levels, norm=norm, extend='max')
+        isentropes = ax.contour(ds_cross['longitude'], pressure_levels, theta_smoothed, colors='black', 
+                                levels=np.arange(250, 450, 1))
+        ax.clabel(isentropes, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
+
+        # Configure subplot
+        ax.set_title(f"{int_datetime_index[0].strftime('%Y-%m-%d %H00 UTC')}")
+        ax.set_xlabel('Longitude (degrees E)')
+        ax.set_ylabel('Pressure (hPa)')
+        ax.set_ylim(1000, 600)  # Ensure 1000 hPa is at the bottom and 600 hPa at the top
+
+        # Manually set y-axis ticks
+        ax.set_yticks(custom_ticks)
+        ax.set_yticklabels([str(tick) for tick in custom_ticks])
+
+    # Add colorbar at the bottom
+    cbar = fig.colorbar(pv_cf, ax=axes, orientation='horizontal', fraction=0.05, pad=0.1)
+    cbar.set_label('PVU (m$^2$ s$^{-1}$ K kg$^{-1}$)')
+    #plt.tight_layout()
+    plt.savefig(f"{path}/theta_pv_cross_section_2x2.png")
+    plt.close()
+
