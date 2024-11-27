@@ -1459,10 +1459,10 @@ def plot_thetae_grad(g, ds_pl, directions, path):
 
         # Calculate the gradient of thetae in both x and y directions
         dx, dy = mpcalc.lat_lon_grid_deltas(ds_pl_sliced.longitude.values, ds_pl_sliced.latitude.values) # units: degrees
-        grad_thetae_x, grad_thetae_y = mpcalc.gradient(thetae, deltas=(dx, dy)) # units: K/m
+        grad_thetae_x, grad_thetae_y = mpcalc.gradient(thetae, deltas=(dx, dy)) # units: K/degrees
         
         # Calculate the magnitude of the thetae gradient
-        thetae_gradient = np.sqrt(grad_thetae_x**2 + grad_thetae_y**2)
+        thetae_gradient = np.sqrt(grad_thetae_x**2 + grad_thetae_y**2) * 111 # units: K/KM
 
         # Get the time of the current time step and create a pandas DatetimeIndex
         time = ds_pl_sliced.time.values
@@ -1470,8 +1470,8 @@ def plot_thetae_grad(g, ds_pl, directions, path):
 
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
 
-        cf = plt.contourf(ds_pl_sliced['longitude'], ds_pl_sliced['latitude'], thetae_gradient, cmap=plt.cm.cool, levels=np.arange(0, 0.5, 0.05), extend='max')
-        plt.colorbar(cf, orientation='vertical', label='$\\theta_e$ (K/m)', fraction=0.046, pad=0.04)
+        cf = plt.contourf(ds_pl_sliced['longitude'], ds_pl_sliced['latitude'], thetae_gradient, cmap=plt.cm.cool, levels=np.arange(0, 0.5*1000, 0.05*1000), extend='max')
+        plt.colorbar(cf, orientation='vertical', label='$\\theta_e$ (K/Km)', fraction=0.046, pad=0.04)
 
         plt.title(f'ERA5 Reanalysis 850-hPa $\\theta_e$ Gradient | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
         ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
@@ -1685,7 +1685,7 @@ def plot_new_thetae_grad(ds_sfc, ds_pl, directions, path, g):
         dtheta_e_dy, dtheta_e_dx = mpcalc.gradient(theta_e_925, coordinates=(latitudes, longitudes))
 
         # Calculate the magnitude of the gradient
-        gradient_magnitude = np.sqrt(dtheta_e_dx**2 + dtheta_e_dy**2)
+        gradient_magnitude = np.sqrt(dtheta_e_dx**2 + dtheta_e_dy**2) # units: K/km
 
         time = ds_sfc_sliced.time.values
         int_datetime_index = pd.DatetimeIndex([time])
@@ -1693,7 +1693,7 @@ def plot_new_thetae_grad(ds_sfc, ds_pl, directions, path, g):
         fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
         # Plot the gradient magnitude using contourf
         magnitude_contour = ax.contourf(theta_e_925['longitude'], theta_e_925['latitude'], gradient_magnitude, levels=np.arange(5, 21, 1), cmap='jet', extend='max')
-        plt.colorbar(magnitude_contour, ax=ax, orientation='vertical', label=r"$|\nabla \theta_e|$ (K/m)", fraction=0.046, pad=0.04)
+        plt.colorbar(magnitude_contour, ax=ax, orientation='vertical', label=r"$|\nabla \theta_e|$ (K/Km)", fraction=0.046, pad=0.04)
         # Plot the specific humidity, potential temperature, and wind barbs
         isobars = plt.contour(mslp['longitude'], mslp['latitude'], mslp_smoothed, colors='black', levels=np.arange(960, 1080, 4), linewidths=1)
         try:
@@ -2141,3 +2141,80 @@ def plot_250_isotachs_thickness(ds_pl, directions, g, path):
         formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
         plt.savefig(f'{path}/thickness_{formatted_datetime}.png')
         plt.close()
+
+def isentropic_sfc(ds_pl, directions, g, path, level):
+    # Loop over the reanalysis time steps
+    for i in range(0, len(ds_pl.time.values)):
+        ds_pl_sliced = ds_pl.isel(time=i)
+
+        # Slice the dataset to get the data for the region of interest
+        ds_pl_sliced = ds_pl_sliced.sel(latitude=slice(directions['North'], directions['South']), longitude=slice(directions['West'], directions['East']))
+
+        isentlevs = [level] * units.kelvin
+
+        T = ds_pl_sliced['T'] * units.kelvin
+        U = ds_pl_sliced['U'] * units('m/s')
+        V = ds_pl_sliced['V'] * units('m/s')
+        Q = ds_pl_sliced['Q'] * units('kg/kg')
+        Z = (ds_pl_sliced['Z'] / g) * units('m') 
+
+        time = ds_pl_sliced.time.values
+        int_datetime_index = pd.DatetimeIndex([time])
+
+        isent_data = mpcalc.isentropic_interpolation_as_dataset(isentlevs, T,  U, V, Q, Z)
+
+        isent_data['Relative_humidity'] = mpcalc.relative_humidity_from_specific_humidity(isent_data['pressure'], isent_data['temperature'], isent_data['Q']).metpy.convert_units('percent')
+
+        smoothed_pres = gaussian_filter(isent_data['pressure'][0, :, :], sigma=1)
+        smoothed_q = gaussian_filter(isent_data['Q'][0, :, :], sigma=1) * 1000 # units g/kg
+
+        u_wnd = isent_data['U'][0, :, :] # units m/s
+        v_wnd = isent_data['V'][0, :, :] # units m/s
+
+        levels = np.arange(4, 15, 1)
+        colors = ['#c3e8fa', '#8bc5e9', '#5195cf', '#49a283', '#6cc04b', '#d8de5a', '#f8b348', '#f46328', '#dc352b', '#bb1b24', '#911618']
+        cmap = mcolors.ListedColormap(colors)
+
+        fig, ax = plt.subplots(figsize=(12, 9), subplot_kw={'projection': ccrs.PlateCarree()})
+
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+
+        # Plot the surface
+        clevisent = np.arange(0, 1000, 25)
+        cs = ax.contour(isent_data['longitude'], isent_data['latitude'], smoothed_pres, clevisent,
+                        colors='k', linewidths=1.0, linestyles='solid')
+        try:
+            plt.clabel(cs, fontsize=10, inline=1, inline_spacing=7,
+                fmt='%i', rightside_up=True, use_clabeltext=True)
+        except IndexError:
+            print("No contours to label for isobars.")
+
+        cf = ax.contourf(isent_data['longitude'], isent_data['latitude'], smoothed_q, levels=levels, cmap=cmap, extend='max')
+
+        #Add a colorbar
+        plt.colorbar(cf, ax=ax, orientation='vertical', label="Specific Humidity (g/kg)", fraction=0.046, pad=0.04)
+
+        #Plot wind barbs on the isentropic surface
+        step = 10
+        ax.barbs(u_wnd['longitude'][::step], u_wnd['latitude'][::step], u_wnd[::step, ::step], v_wnd[::step, ::step], length=6, color='black')
+
+        plt.title(f'ERA5 Reanalysis {isentlevs.magnitude[0]:0.0f}K Isentropic Analysis and Winds | {int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC")}', fontsize=14, weight='bold')
+        ax.set_extent([directions['West'], directions['East'], directions['South'], directions['North']-5])
+        ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='gray', linewidth=0.5)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5)
+        ax.add_feature(cfeature.OCEAN, color='white')
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, color='#fbf5e9')
+
+        # Add gridlines and format longitude/latitude labels
+        gls = ax.gridlines(draw_labels=True, color='black', linestyle='--', alpha=0.35)
+        gls.top_labels = False
+        gls.right_labels = False
+        lon_formatter = LongitudeFormatter(zero_direction_label=True)
+        lat_formatter = LatitudeFormatter()
+        ax.xaxis.set_major_formatter(lon_formatter)
+        ax.yaxis.set_major_formatter(lat_formatter)
+
+        plt.tight_layout()
+        formatted_datetime = int_datetime_index[0].strftime("%Y-%m-%d %H00 UTC").replace(':', '-')
+        plt.savefig(f'{path}/{formatted_datetime}.png')

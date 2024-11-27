@@ -14,10 +14,10 @@ import sys
 import os
 
 sys.path.append(os.path.abspath('C:/Users/Tony/Documents/GitHub/EAE-593-Project'))
-from main_script import plot_vorticity_adv, load_datasets, plot_250_isotachs, plot_iwv, plot_ivt, plot_q_uv_zeta, plot_pressure_pert, plot_250_isotachs_ageo, plot_250_isotachs_ageo_stream, theta_pv_cross_section, plot_pressure_pert_new, plot_sfc, plot_fgen, fgen_pv_cross_section, plot_new_thetae_grad, plot_ivt_panel, plot_pv_vadv, theta_pv_cross_section_2x2, plot_250_isotachs_thickness
+from main_script import plot_vorticity_adv, load_datasets, plot_250_isotachs, plot_iwv, plot_ivt, plot_q_uv_zeta, plot_pressure_pert, plot_250_isotachs_ageo, plot_250_isotachs_ageo_stream, theta_pv_cross_section, plot_pressure_pert_new, plot_sfc, plot_fgen, fgen_pv_cross_section, plot_new_thetae_grad, plot_ivt_panel, plot_pv_vadv, theta_pv_cross_section_2x2, plot_250_isotachs_thickness, isentropic_sfc
 
 if __name__ == '__main__':
-    variable_name = 'Thickness'
+    variable_name = 'Isentropic'
     year = 2019
     month = 2
     first_day = 25
@@ -29,6 +29,7 @@ if __name__ == '__main__':
     start_point = (40.0, 360 - 130) # units: degrees North, degrees East
     end_point = (44.0, 360 - 124) # units: degrees North, degrees East
     g = 9.81 # units: m/s^2
+    isentropic_level = 296 # units: K
 
     # Get the directory of the current script
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -57,4 +58,5 @@ if __name__ == '__main__':
         #plot_ivt_panel(g, ds_pl, ds_sfc, directions, path)
         #plot_pv_vadv(start_point, end_point, ds_pl, directions, g, path)
         #theta_pv_cross_section_2x2(start_point, end_point, ds_pl, directions, g, path)
-        plot_250_isotachs_thickness(ds_pl=ds_pl, directions=directions, g=g, path=path)
+        #plot_250_isotachs_thickness(ds_pl=ds_pl, directions=directions, g=g, path=path)
+        isentropic_sfc(ds_pl=ds_pl, directions=directions, g=g, path=path, level=isentropic_level)
