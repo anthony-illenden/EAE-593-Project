@@ -14,7 +14,12 @@ import sys
 import os
 
 sys.path.append(os.path.abspath('C:/Users/Tony/Documents/GitHub/EAE-593-Project'))
-from main_script import plot_vorticity_adv, load_datasets, plot_250_isotachs, plot_iwv, plot_ivt, plot_q_uv_zeta, plot_pressure_pert, plot_250_isotachs_ageo, plot_250_isotachs_ageo_stream, theta_pv_cross_section, plot_pressure_pert_new, plot_sfc, plot_fgen, fgen_pv_cross_section, plot_new_thetae_grad, plot_ivt_panel, plot_pv_vadv, theta_pv_cross_section_2x2, plot_250_isotachs_thickness, isentropic_sfc
+from main_script import (
+    plot_vorticity_adv, load_datasets, plot_250_isotachs, plot_iwv, plot_ivt, 
+    plot_q_uv_zeta, plot_pressure_pert, plot_250_isotachs_ageo, 
+    plot_250_isotachs_ageo_stream, theta_pv_cross_section, plot_pressure_pert_new, 
+    plot_sfc, plot_fgen, fgen_pv_cross_section, plot_new_thetae_grad, plot_ivt_panel, 
+    plot_pv_vadv, theta_pv_cross_section_2x2, plot_250_isotachs_thickness, isentropic_sfc)
 
 if __name__ == '__main__':
     variable_name = 'Isentropic'
