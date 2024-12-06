@@ -12,21 +12,7 @@ from scipy.ndimage import gaussian_filter
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 
 def load_datasets(year, month, start_day, start_hour=0, end_day=None, end_hour=23):
-    """
-    Load datasets for specified start day, month, and year.
-    
-    Parameters:
-        year (int): The year of the data.
-        month (int): The month of the data.
-        start_day (int): The start day of the data.
-        start_hour (int, optional): The hour of the start day. Defaults to 0.
-        end_day (int, optional): The end day of the data. Defaults to start_day.
-        end_hour (int, optional): The hour of the end day. Defaults to 23.
-        
-    Returns:
-        tuple: Xarray Datasets for pressure level and surface datasets.
-    """
-    
+
     # Set end_day to start_day if not provided
     if end_day is None:
         end_day = start_day
@@ -249,11 +235,7 @@ def plot_250_isotachs(ds_pl, directions, g, path):
             ax.clabel(isohypses, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
         except IndexError:
             print("No contours to label.")
-        #thickness_c = plt.contour(thickness['longitude'], thickness['latitude'], thickness_smoothed, colors='black', levels=np.arange(4000,7000,100), linewidths=1, linestyles='dashed')
-        #try:
-        #    ax.clabel(thickness_c, inline=True, inline_spacing=5, fontsize=10, fmt='%i')
-        #except IndexError:
-        #    print("No contours to label.")
+
         cf = plt.contourf(u_250['longitude'], u_250['latitude'], wnd_smoothed, cmap=cmap, norm=norm, levels=levels, extend='max')
         plt.colorbar(cf, orientation='vertical', label='Wind Speed (ms$^{-1}$)', fraction=0.046, pad=0.04)
 
